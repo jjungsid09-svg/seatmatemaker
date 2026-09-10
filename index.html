@@ -291,7 +291,8 @@
 </div>
 
 <script>
-const STORAGE_KEY = 'classroom-buddy-v1';
+const FIREBASE_URL = 'https://seatmatemaker-default-rtdb.asia-southeast1.firebasedatabase.app';
+const DATA_PATH = 'classroom-data';
 let state = null;
 let activeTab = 'students';
 let pendingAssignment = null; // {pairs:[[id,id]], triple:[id,id,id]|null, repeats:Set, date}
@@ -385,16 +386,20 @@ function defaultState(){
 
 async function loadState(){
   try{
-    const res = await window.storage.get(STORAGE_KEY, false);
-    if(res && res.value){
-      state = JSON.parse(res.value);
+    const res = await fetch(`${FIREBASE_URL}/${DATA_PATH}.json`);
+    if(!res.ok) throw new Error('불러오기 실패: ' + res.status);
+    const data = await res.json();
+    if(data){
+      state = data;
       if(!state.archives) state.archives = [];
       if(!state.seating) state.seating = { cols: 3, rows: 4 };
     } else {
       state = defaultState();
     }
   }catch(e){
+    console.error('불러오기 오류', e);
     state = defaultState();
+    loadErrorFlag = true;
   }
   render();
 }
@@ -420,14 +425,19 @@ async function saveState(){
 
 async function trySaveOnce(){
   try{
-    const res = await window.storage.set(STORAGE_KEY, JSON.stringify(state), false);
-    return !!res;
+    const res = await fetch(`${FIREBASE_URL}/${DATA_PATH}.json`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(state)
+    });
+    return res.ok;
   }catch(e){
     console.error('저장 오류', e);
     return false;
   }
 }
 let saveErrorFlag = false;
+let loadErrorFlag = false;
 
 // ---------- 매칭 알고리즘 ----------
 function buildUsedSet(history){
@@ -780,6 +790,16 @@ function el(html){
 function render(){
   const app = document.getElementById('app');
   app.innerHTML = '';
+  if(loadErrorFlag){
+    const banner = el(`
+      <div class="banner warn" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <span>⚠️ 저장된 데이터를 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해주세요.</span>
+        <button class="btn danger" id="retry-load-btn">다시 불러오기</button>
+      </div>
+    `);
+    banner.querySelector('#retry-load-btn').addEventListener('click', ()=>{ loadErrorFlag=false; loadState(); });
+    app.appendChild(banner);
+  }
   if(saveErrorFlag){
     const banner = el(`
       <div class="banner warn" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
