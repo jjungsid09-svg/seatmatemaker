@@ -267,6 +267,60 @@
     margin-bottom:8px; font-size:14px;
   }
 
+  .date-picker{
+    display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px;
+  }
+  button.date-btn{
+    font-family:'Gaegu', sans-serif;
+    font-size:17px;
+    background: transparent;
+    border: 2px solid var(--board-line);
+    color: var(--chalk-dim);
+    padding: 8px 16px;
+    border-radius: 999px;
+    cursor:pointer;
+  }
+  button.date-btn:hover{ filter:brightness(1.1); }
+  button.date-btn.active{
+    color: var(--board);
+    background: var(--yellow);
+    border-color: var(--yellow);
+    font-weight:700;
+  }
+
+  .present-board{
+    background: var(--board);
+    border: 1px solid var(--board-line);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .present-board:fullscreen{
+    display:flex; align-items:center; justify-content:center;
+    padding: 48px; border-radius:0;
+  }
+  .present-board:-webkit-full-screen{
+    display:flex; align-items:center; justify-content:center;
+    padding: 48px;
+  }
+  .present-grid{
+    display:grid; gap:18px; width:100%;
+  }
+  .present-duo{
+    background: var(--card);
+    color: var(--card-ink);
+    border-radius: 12px;
+    padding: 24px 10px;
+    display:flex; align-items:center; justify-content:center;
+    gap:8px; flex-wrap:wrap;
+    box-shadow: 0 4px 0 rgba(0,0,0,0.2);
+  }
+  .present-duo .p-name{ font-family:'Gaegu', sans-serif; font-weight:700; font-size:30px; }
+  .present-duo .p-link{ opacity:0.35; font-size:24px; }
+  .present-duo.triple .p-name{ font-size:24px; }
+  .present-empty{
+    border:2px dashed var(--board-line); border-radius:12px; min-height:90px;
+  }
+
   .modal-overlay{
     position:fixed; inset:0; background:rgba(0,0,0,0.55);
     display:flex; align-items:center; justify-content:center;
@@ -310,6 +364,7 @@ const DATA_ROOT = 'classroom-data';
 let state = null;
 let activeTab = 'students';
 let pendingAssignment = null; // {pairs:[[id,id]], triple:[id,id,id]|null, repeats:Set, date}
+let presentRecId = null; // 큰 화면 탭에서 현재 선택된 기록 id
 
 function uid(){ return 'id_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8); }
 function todayStr(){
@@ -471,6 +526,22 @@ function buildUsedSet(history){
     }
   });
   return s;
+}
+
+function buildLastSeatMap(history){
+  // 각 학생이 가장 최근에 앉았던 자리(분단/줄)를 찾아줘요.
+  const map = {};
+  const seen = new Set();
+  for(const rec of history){
+    if(!rec.seatMap) continue;
+    for(const entry of rec.seatMap){
+      if(!seen.has(entry.id)){
+        map[entry.id] = {r:entry.r, c:entry.c};
+        seen.add(entry.id);
+      }
+    }
+  }
+  return map;
 }
 
 function backtrackMatch(ids, isForbidden, counter){
@@ -657,7 +728,8 @@ function hasIncompat(groupA, groupB, incompatSet){
   return false;
 }
 
-function placeGroupsInGrid(groups, cols, rows, incompatSet){
+function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
+  lastSeatMap = lastSeatMap || {};
   const totalCells = cols * rows;
   if(groups.length > totalCells){
     return {error:`좌석(${totalCells}자리)보다 모둠 수(${groups.length})가 많아요. 분단/줄 수를 늘려주세요.`};
@@ -668,7 +740,14 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet){
     return activeCellIdxs.filter(other=> other!==idx && cellsAdjacent(allCells[idx], allCells[other]));
   });
 
-  function attempt(){
+  function isSameSeatAsBefore(g, cell){
+    return g.some(id=>{
+      const last = lastSeatMap[id];
+      return last && last.r===cell.r && last.c===cell.c;
+    });
+  }
+
+  function attempt(avoidSeatRepeat){
     const order = shuffle(activeCellIdxs.map((_,i)=>i)); // order in which we fill positions (indices into activeCellIdxs)
     const assignment = new Array(activeCellIdxs.length).fill(null);
     const counter = {calls:0};
@@ -677,6 +756,7 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet){
       counter.calls++;
       if(counter.calls > 200000) return false;
       const posIdx = order[step];
+      const cell = allCells[activeCellIdxs[posIdx]];
       const nbrPosIdxs = neighborMap[posIdx].map(cellIdx=>activeCellIdxs.indexOf(cellIdx));
       const candidates = shuffle(remaining);
       for(const g of candidates){
@@ -684,6 +764,7 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet){
         for(const nPos of nbrPosIdxs){
           if(assignment[nPos] && hasIncompat(g, assignment[nPos], incompatSet)){ conflict=true; break; }
         }
+        if(!conflict && avoidSeatRepeat && isSameSeatAsBefore(g, cell)){ conflict = true; }
         if(conflict) continue;
         assignment[posIdx] = g;
         const rest = remaining.filter(x=>x!==g);
@@ -696,10 +777,18 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet){
     return ok ? assignment : null;
   }
 
+  // 1차: 안 맞는 친구 회피 + 이전 자리 회피를 모두 시도
   let assignment = null;
   for(let i=0;i<25;i++){
-    assignment = attempt();
+    assignment = attempt(true);
     if(assignment) break;
+  }
+  // 2차: 도저히 안 되면 이전 자리 회피는 포기하고, 안 맞는 친구 회피만 유지
+  if(!assignment){
+    for(let i=0;i<25;i++){
+      assignment = attempt(false);
+      if(assignment) break;
+    }
   }
 
   let violations = [];
@@ -717,6 +806,12 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet){
     }
   }
 
+  let seatRepeatCount = 0;
+  activeCellIdxs.forEach((cellIdx,posIdx)=>{
+    const g = assignment[posIdx];
+    if(g && isSameSeatAsBefore(g, allCells[cellIdx])) seatRepeatCount++;
+  });
+
   const cellsResult = allCells.map((cell,i)=>{
     const activePos = activeCellIdxs.indexOf(i);
     return { r: cell.r, c: cell.c, group: activePos>=0 ? assignment[activePos] : null, hasViolation:false };
@@ -727,7 +822,7 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet){
     cellsResult[cellIdxB].hasViolation = true;
   });
 
-  return { cells: cellsResult, cols, rows, violationCount: violations.length };
+  return { cells: cellsResult, cols, rows, violationCount: violations.length, seatRepeatCount };
 }
 
 // ---------- 지난 기록 가져오기 ----------
@@ -838,6 +933,7 @@ function render(){
   if(activeTab==='students') panel.appendChild(renderStudentsTab());
   else if(activeTab==='incompat') panel.appendChild(renderIncompatTab());
   else if(activeTab==='assign') panel.appendChild(renderAssignTab());
+  else if(activeTab==='present') panel.appendChild(renderPresentTab());
   else if(activeTab==='history') panel.appendChild(renderHistoryTab());
   app.appendChild(panel);
 }
@@ -871,6 +967,7 @@ function renderTabs(){
     ['students','학생 명단'],
     ['incompat','안 맞는 친구'],
     ['assign','짝꿍 뽑기'],
+    ['present','큰 화면'],
     ['history','지난 기록'],
   ];
   const nav = el(`<nav class="tabs"></nav>`);
@@ -1210,6 +1307,8 @@ function renderAssignTab(){
         wrap.appendChild(el(`<div class="banner warn">${escapeHtml(seating.error)} (짝 배정은 완료됐지만 자리 배치는 표시할 수 없어요)</div>`));
       } else if(seating && seating.violationCount>0){
         wrap.appendChild(el(`<div class="banner warn">앞/뒤/좌우 배치에서 "안 맞는 친구"가 완전히 안 겹치는 자리를 못 찾았어요 (남은 충돌 ${seating.violationCount}건, 붉은 테두리 표시). "다시 뽑기"를 눌러보거나, 상성 설정을 조금 줄여보세요.</div>`));
+      } else if(seating && seating.seatRepeatCount>0){
+        wrap.appendChild(el(`<div class="banner warn">일부 학생(${seating.seatRepeatCount}명)이 저번에 앉았던 자리에 다시 배정됐어요. 조합이 너무 제한적일 때 생길 수 있어요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
       } else if(anyRepeat){
         wrap.appendChild(el(`<div class="banner warn">일부는 이전 짝과 다시 만났어요. 조합이 너무 제한적일 때 생길 수 있어요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
       } else {
@@ -1249,20 +1348,33 @@ function renderAssignTab(){
     if(pendingAssignment && !pendingAssignment.error){
       const incompatSet = new Set(state.incompatible.map(([a,b])=>keyOf(a,b)));
       const groups = groupsFromAssignment(pendingAssignment);
-      pendingAssignment.seating = placeGroupsInGrid(groups, state.seating.cols, state.seating.rows, incompatSet);
+      pendingAssignment.seating = placeGroupsInGrid(groups, state.seating.cols, state.seating.rows, incompatSet, buildLastSeatMap(state.history));
     }
     render();
   });
   const confirmBtn = wrap.querySelector('#confirm-btn');
   if(confirmBtn){
     confirmBtn.addEventListener('click', ()=>{
+      const seating = pendingAssignment.seating;
+      let seatMap = null;
+      if(seating && !seating.error){
+        seatMap = [];
+        seating.cells.forEach(cell=>{
+          if(cell.group){
+            cell.group.forEach(id=> seatMap.push({id, r:cell.r, c:cell.c}));
+          }
+        });
+      }
       state.history.unshift({
         id: uid(),
         date: todayStr(),
         pairs: pendingAssignment.pairs,
         triple: pendingAssignment.triple,
         repeats: pendingAssignment.repeats || [],
-        tripleRepeat: pendingAssignment.tripleRepeat || false
+        tripleRepeat: pendingAssignment.tripleRepeat || false,
+        seatMap: seatMap,
+        seatingCols: (seating && !seating.error) ? seating.cols : null,
+        seatingRows: (seating && !seating.error) ? seating.rows : null
       });
       pendingAssignment = null;
       saveState();
@@ -1270,6 +1382,85 @@ function renderAssignTab(){
       render();
     });
   }
+
+  return wrap;
+}
+
+function renderPresentTab(){
+  const wrap = el(`<div></div>`);
+  wrap.innerHTML = `<h2>큰 화면으로 보기</h2><p class="hint">날짜를 누르면 그날 확정한 짝꿍과 자리를 큼직하게 보여줘요. TV나 프로젝터에 띄우고 "전체 화면"을 누르면 더 크게 볼 수 있어요.</p>`;
+
+  if(state.history.length===0){
+    wrap.appendChild(el(`<div class="empty">아직 확정된 기록이 없어요. "짝꿍 뽑기" 탭에서 먼저 짝을 확정해주세요.</div>`));
+    return wrap;
+  }
+
+  if(!presentRecId || !state.history.some(r=>r.id===presentRecId)){
+    presentRecId = state.history[0].id;
+  }
+
+  const dateRow = el(`<div class="date-picker"></div>`);
+  state.history.forEach(rec=>{
+    const btn = el(`<button class="date-btn ${rec.id===presentRecId?'active':''}">${escapeHtml(rec.date)}</button>`);
+    btn.addEventListener('click', ()=>{ presentRecId = rec.id; render(); });
+    dateRow.appendChild(btn);
+  });
+  wrap.appendChild(dateRow);
+
+  const fsBtn = el(`<button class="btn secondary" id="present-fs-btn" style="margin-bottom:16px;">🖥 전체 화면으로 보기</button>`);
+  wrap.appendChild(fsBtn);
+
+  const rec = state.history.find(r=>r.id===presentRecId);
+  const board = el(`<div class="present-board"></div>`);
+
+  if(rec.seatMap && rec.seatMap.length>0 && rec.seatingCols && rec.seatingRows){
+    const cols = rec.seatingCols, rows = rec.seatingRows;
+    const cellMap = {};
+    rec.seatMap.forEach(({id,r,c})=>{
+      const key = r+'_'+c;
+      if(!cellMap[key]) cellMap[key]=[];
+      cellMap[key].push(id);
+    });
+    const grid = el(`<div class="present-grid" style="grid-template-columns:repeat(${cols}, 1fr);"></div>`);
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        const ids = cellMap[r+'_'+c];
+        if(!ids){
+          grid.appendChild(el(`<div class="present-empty"></div>`));
+          continue;
+        }
+        const names = orderForDisplay(ids).map(id=>nameOf(id));
+        grid.appendChild(el(`
+          <div class="present-duo ${ids.length>2?'triple':''}">
+            ${names.map(n=>`<span class="p-name">${escapeHtml(n)}</span>`).join('<span class="p-link">·</span>')}
+          </div>
+        `));
+      }
+    }
+    board.appendChild(grid);
+  } else {
+    board.appendChild(el(`<div class="banner info" style="margin-bottom:14px;">이 기록에는 자리 배치 정보가 없어서 짝 목록만 보여줘요.</div>`));
+    const grid = el(`<div class="present-grid" style="grid-template-columns:repeat(3, 1fr);"></div>`);
+    (rec.pairs||[]).forEach(([a,b])=>{
+      const [x,y] = orderForDisplay([a,b]);
+      grid.appendChild(el(`<div class="present-duo"><span class="p-name">${escapeHtml(nameOf(x))}</span><span class="p-link">·</span><span class="p-name">${escapeHtml(nameOf(y))}</span></div>`));
+    });
+    if(rec.triple){
+      const [a,b,c] = orderForDisplay(rec.triple);
+      grid.appendChild(el(`<div class="present-duo triple"><span class="p-name">${escapeHtml(nameOf(a))}</span><span class="p-link">·</span><span class="p-name">${escapeHtml(nameOf(b))}</span><span class="p-link">·</span><span class="p-name">${escapeHtml(nameOf(c))}</span></div>`));
+    }
+    if(rec.solo){
+      grid.appendChild(el(`<div class="present-duo"><span class="p-name">${escapeHtml(nameOf(rec.solo))}</span></div>`));
+    }
+    board.appendChild(grid);
+  }
+
+  wrap.appendChild(board);
+
+  fsBtn.addEventListener('click', ()=>{
+    if(board.requestFullscreen) board.requestFullscreen();
+    else if(board.webkitRequestFullscreen) board.webkitRequestFullscreen();
+  });
 
   return wrap;
 }
