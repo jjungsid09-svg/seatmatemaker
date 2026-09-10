@@ -6,6 +6,8 @@
 <title>우리반 짝꿍칠판</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Gaegu:wght@400;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <style>
   :root{
     --board: #24413A;
@@ -291,8 +293,20 @@
 </div>
 
 <script>
-const FIREBASE_URL = 'https://seatmatemaker-default-rtdb.asia-southeast1.firebasedatabase.app';
-const DATA_PATH = 'classroom-data';
+const firebaseConfig = {
+  apiKey: "AIzaSyBtxFS2joAZTdkQW8j3HgnXqzDsLUIjMyA",
+  authDomain: "seatmatemaker.firebaseapp.com",
+  databaseURL: "https://seatmatemaker-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "seatmatemaker",
+  storageBucket: "seatmatemaker.firebasestorage.app",
+  messagingSenderId: "573616467584",
+  appId: "1:573616467584:web:e9008b3a6c3ca65d074065",
+  measurementId: "G-PPP28K64PK"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+let currentUser = null;
+const DATA_ROOT = 'classroom-data';
 let state = null;
 let activeTab = 'students';
 let pendingAssignment = null; // {pairs:[[id,id]], triple:[id,id,id]|null, repeats:Set, date}
@@ -384,9 +398,15 @@ function defaultState(){
   };
 }
 
+async function userPathUrl(){
+  const token = await currentUser.getIdToken();
+  return `${firebaseConfig.databaseURL}/${DATA_ROOT}/${currentUser.uid}.json?auth=${token}`;
+}
+
 async function loadState(){
   try{
-    const res = await fetch(`${FIREBASE_URL}/${DATA_PATH}.json`);
+    const url = await userPathUrl();
+    const res = await fetch(url);
     if(!res.ok) throw new Error('불러오기 실패: ' + res.status);
     const data = await res.json();
     if(data){
@@ -425,7 +445,8 @@ async function saveState(){
 
 async function trySaveOnce(){
   try{
-    const res = await fetch(`${FIREBASE_URL}/${DATA_PATH}.json`, {
+    const url = await userPathUrl();
+    const res = await fetch(url, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(state)
@@ -828,12 +849,19 @@ function renderHeader(){
         <h1 class="title">우리반 짝꿍칠판</h1>
         <div class="subtitle">한 번 짝했던 친구는 피하고, 안 맞는 친구끼리는 자동으로 갈라줘요</div>
       </div>
-      <input class="year-label" type="text" value="${escapeAttr(state.yearLabel)}" />
+      <div style="text-align:right;">
+        <input class="year-label" type="text" value="${escapeAttr(state.yearLabel)}" /><br>
+        <span style="font-size:12px; color:var(--chalk-dim);">${escapeHtml(currentUser && currentUser.email ? currentUser.email : '')}</span>
+        <button class="btn secondary" id="logout-btn" style="font-size:12px; padding:3px 10px; margin-left:6px;">로그아웃</button>
+      </div>
     </header>
   `);
   header.querySelector('.year-label').addEventListener('change', (e)=>{
     state.yearLabel = e.target.value || defaultState().yearLabel;
     saveState();
+  });
+  header.querySelector('#logout-btn').addEventListener('click', ()=>{
+    auth.signOut();
   });
   return header;
 }
@@ -1362,7 +1390,39 @@ function renderHistoryTab(){
   return wrap;
 }
 
-loadState();
+function renderLoginScreen(){
+  const app = document.getElementById('app');
+  app.innerHTML = '';
+  const box = el(`
+    <div style="max-width:360px; margin:80px auto; text-align:center;">
+      <h1 class="title" style="font-size:34px;">우리반 짝꿍칠판</h1>
+      <p class="subtitle" style="margin-bottom:28px;">구글 계정으로 로그인하면 나만의 반 데이터를 사용할 수 있어요.</p>
+      <button class="btn big" id="google-login-btn">구글로 로그인</button>
+      <p id="login-error" style="color:var(--coral); font-size:13px; margin-top:14px;"></p>
+    </div>
+  `);
+  app.appendChild(box);
+  box.querySelector('#google-login-btn').addEventListener('click', async ()=>{
+    try{
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await auth.signInWithPopup(provider);
+    }catch(e){
+      console.error('로그인 오류', e);
+      box.querySelector('#login-error').textContent = '로그인에 실패했어요. 다시 시도해주세요.';
+    }
+  });
+}
+
+auth.onAuthStateChanged((user)=>{
+  if(user){
+    currentUser = user;
+    loadState();
+  }else{
+    currentUser = null;
+    state = null;
+    renderLoginScreen();
+  }
+});
 </script>
 </body>
 </html>
