@@ -747,7 +747,16 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
     });
   }
 
-  function attempt(avoidSeatRepeat){
+  function isEdgeRowRepeat(g, cell){
+    // 맨 앞줄(r===0) 또는 맨 뒷줄(r===rows-1)에 저번에도 있었던 학생이 이번에도 같은 쪽 줄에 배정되는지 확인
+    if(cell.r !== 0 && cell.r !== rows-1) return false;
+    return g.some(id=>{
+      const last = lastSeatMap[id];
+      return last && last.r === cell.r;
+    });
+  }
+
+  function attempt(avoidSeatRepeat, avoidEdgeRepeat){
     const order = shuffle(activeCellIdxs.map((_,i)=>i)); // order in which we fill positions (indices into activeCellIdxs)
     const assignment = new Array(activeCellIdxs.length).fill(null);
     const counter = {calls:0};
@@ -765,6 +774,7 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
           if(assignment[nPos] && hasIncompat(g, assignment[nPos], incompatSet)){ conflict=true; break; }
         }
         if(!conflict && avoidSeatRepeat && isSameSeatAsBefore(g, cell)){ conflict = true; }
+        if(!conflict && avoidEdgeRepeat && isEdgeRowRepeat(g, cell)){ conflict = true; }
         if(conflict) continue;
         assignment[posIdx] = g;
         const rest = remaining.filter(x=>x!==g);
@@ -777,16 +787,23 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
     return ok ? assignment : null;
   }
 
-  // 1차: 안 맞는 친구 회피 + 이전 자리 회피를 모두 시도
+  // 1차: 안 맞는 친구 + 이전 자리 + 이전 맨 앞/뒷줄까지 모두 회피 시도
   let assignment = null;
   for(let i=0;i<25;i++){
-    assignment = attempt(true);
+    assignment = attempt(true, true);
     if(assignment) break;
   }
-  // 2차: 도저히 안 되면 이전 자리 회피는 포기하고, 안 맞는 친구 회피만 유지
+  // 2차: 앞/뒷줄 회피는 포기하고, 이전 자리 회피는 유지
   if(!assignment){
     for(let i=0;i<25;i++){
-      assignment = attempt(false);
+      assignment = attempt(true, false);
+      if(assignment) break;
+    }
+  }
+  // 3차: 이전 자리 회피도 포기, 안 맞는 친구 회피만 유지
+  if(!assignment){
+    for(let i=0;i<25;i++){
+      assignment = attempt(false, false);
       if(assignment) break;
     }
   }
@@ -807,9 +824,13 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
   }
 
   let seatRepeatCount = 0;
+  let edgeRepeatCount = 0;
   activeCellIdxs.forEach((cellIdx,posIdx)=>{
     const g = assignment[posIdx];
-    if(g && isSameSeatAsBefore(g, allCells[cellIdx])) seatRepeatCount++;
+    if(!g) return;
+    const cell = allCells[cellIdx];
+    if(isSameSeatAsBefore(g, cell)) seatRepeatCount++;
+    if(isEdgeRowRepeat(g, cell)) edgeRepeatCount++;
   });
 
   const cellsResult = allCells.map((cell,i)=>{
@@ -822,7 +843,7 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
     cellsResult[cellIdxB].hasViolation = true;
   });
 
-  return { cells: cellsResult, cols, rows, violationCount: violations.length, seatRepeatCount };
+  return { cells: cellsResult, cols, rows, violationCount: violations.length, seatRepeatCount, edgeRepeatCount };
 }
 
 // ---------- 지난 기록 가져오기 ----------
@@ -1309,6 +1330,8 @@ function renderAssignTab(){
         wrap.appendChild(el(`<div class="banner warn">앞/뒤/좌우 배치에서 "안 맞는 친구"가 완전히 안 겹치는 자리를 못 찾았어요 (남은 충돌 ${seating.violationCount}건, 붉은 테두리 표시). "다시 뽑기"를 눌러보거나, 상성 설정을 조금 줄여보세요.</div>`));
       } else if(seating && seating.seatRepeatCount>0){
         wrap.appendChild(el(`<div class="banner warn">일부 학생(${seating.seatRepeatCount}명)이 저번에 앉았던 자리에 다시 배정됐어요. 조합이 너무 제한적일 때 생길 수 있어요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
+      } else if(seating && seating.edgeRepeatCount>0){
+        wrap.appendChild(el(`<div class="banner warn">일부 학생(${seating.edgeRepeatCount}명)이 저번에도 맨 앞줄/맨 뒷줄이었는데 이번에도 같은 쪽 줄이에요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
       } else if(anyRepeat){
         wrap.appendChild(el(`<div class="banner warn">일부는 이전 짝과 다시 만났어요. 조합이 너무 제한적일 때 생길 수 있어요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
       } else {
