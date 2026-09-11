@@ -319,7 +319,7 @@
     letter-spacing: 8px;
     padding: 12px;
     border-radius: 10px;
-    font-size: clamp(16px, 2.2vw, 26px);
+    font-size: 18px;
     box-shadow: 0 3px 0 rgba(0,0,0,0.25);
   }
   .present-grid{
@@ -338,9 +338,17 @@
     gap:10px; flex-wrap:wrap;
     box-shadow: 0 4px 0 rgba(0,0,0,0.2);
   }
-  .present-duo .p-name{ font-family:'Gaegu', sans-serif; font-weight:700; font-size: clamp(22px, 3.4vw, 54px); }
-  .present-duo .p-link{ opacity:0.35; font-size: clamp(18px, 2.6vw, 42px); }
-  .present-duo.triple .p-name{ font-size: clamp(18px, 2.6vw, 40px); }
+  .present-duo .p-name{ font-family:'Gaegu', sans-serif; font-weight:700; font-size:24px; white-space:nowrap; }
+  .present-duo .p-link{ opacity:0.35; font-size:19px; }
+  .present-duo.triple .p-name{ font-size:19px; }
+  .present-board:fullscreen .present-duo .p-name,
+  .present-board:-webkit-full-screen .present-duo .p-name{ font-size: clamp(30px, 3.6vw, 64px); }
+  .present-board:fullscreen .present-duo .p-link,
+  .present-board:-webkit-full-screen .present-duo .p-link{ font-size: clamp(22px, 2.6vw, 46px); }
+  .present-board:fullscreen .present-duo.triple .p-name,
+  .present-board:-webkit-full-screen .present-duo.triple .p-name{ font-size: clamp(22px, 2.6vw, 46px); }
+  .present-board:fullscreen .present-chalkboard-bar,
+  .present-board:-webkit-full-screen .present-chalkboard-bar{ font-size: clamp(18px, 2.4vw, 30px); }
   .present-empty{
     border:2px dashed var(--board-line); border-radius:12px;
     width:90%; height:100%; margin:0 auto; min-height:70px;
