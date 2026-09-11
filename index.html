@@ -292,33 +292,58 @@
     background: var(--board);
     border: 1px solid var(--board-line);
     border-radius: var(--radius);
-    padding: 20px;
+    padding: 20px 26px;
+    display:flex;
+    flex-direction:column;
+    gap:16px;
+    min-height: 520px;
   }
   .present-board:fullscreen{
-    display:flex; align-items:center; justify-content:center;
-    padding: 48px; border-radius:0;
+    width:100vw; height:100vh;
+    padding: 32px 56px;
+    border-radius:0;
+    min-height:0;
   }
   .present-board:-webkit-full-screen{
-    display:flex; align-items:center; justify-content:center;
-    padding: 48px;
+    width:100vw; height:100vh;
+    padding: 32px 56px;
+    min-height:0;
+  }
+  .present-chalkboard-bar{
+    flex-shrink:0;
+    background: linear-gradient(135deg, #7093DD, #4C67B8);
+    color:#fff;
+    text-align:center;
+    font-family:'Gaegu', sans-serif;
+    font-weight:700;
+    letter-spacing: 8px;
+    padding: 12px;
+    border-radius: 10px;
+    font-size: clamp(16px, 2.2vw, 26px);
+    box-shadow: 0 3px 0 rgba(0,0,0,0.25);
   }
   .present-grid{
-    display:grid; gap:18px; width:100%;
+    display:grid; column-gap:28px; row-gap:14px; width:100%;
+    flex: 1; min-height:0;
   }
   .present-duo{
     background: var(--card);
     color: var(--card-ink);
     border-radius: 12px;
-    padding: 24px 10px;
+    width: 90%;
+    height: 100%;
+    margin: 0 auto;
+    padding: 8px;
     display:flex; align-items:center; justify-content:center;
-    gap:8px; flex-wrap:wrap;
+    gap:10px; flex-wrap:wrap;
     box-shadow: 0 4px 0 rgba(0,0,0,0.2);
   }
-  .present-duo .p-name{ font-family:'Gaegu', sans-serif; font-weight:700; font-size:30px; }
-  .present-duo .p-link{ opacity:0.35; font-size:24px; }
-  .present-duo.triple .p-name{ font-size:24px; }
+  .present-duo .p-name{ font-family:'Gaegu', sans-serif; font-weight:700; font-size: clamp(22px, 3.4vw, 54px); }
+  .present-duo .p-link{ opacity:0.35; font-size: clamp(18px, 2.6vw, 42px); }
+  .present-duo.triple .p-name{ font-size: clamp(18px, 2.6vw, 40px); }
   .present-empty{
-    border:2px dashed var(--board-line); border-radius:12px; min-height:90px;
+    border:2px dashed var(--board-line); border-radius:12px;
+    width:90%; height:100%; margin:0 auto; min-height:70px;
   }
 
   .modal-overlay{
@@ -1435,6 +1460,7 @@ function renderPresentTab(){
 
   const rec = state.history.find(r=>r.id===presentRecId);
   const board = el(`<div class="present-board"></div>`);
+  board.appendChild(el(`<div class="present-chalkboard-bar">칠 판</div>`));
 
   if(rec.seatMap && rec.seatMap.length>0 && rec.seatingCols && rec.seatingRows){
     const cols = rec.seatingCols, rows = rec.seatingRows;
@@ -1444,7 +1470,7 @@ function renderPresentTab(){
       if(!cellMap[key]) cellMap[key]=[];
       cellMap[key].push(id);
     });
-    const grid = el(`<div class="present-grid" style="grid-template-columns:repeat(${cols}, 1fr);"></div>`);
+    const grid = el(`<div class="present-grid" style="grid-template-columns:repeat(${cols}, 1fr); grid-template-rows:repeat(${rows}, 1fr);"></div>`);
     for(let r=0;r<rows;r++){
       for(let c=0;c<cols;c++){
         const ids = cellMap[r+'_'+c];
