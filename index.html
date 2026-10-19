@@ -577,6 +577,73 @@ function buildLastSeatMap(history){
   return map;
 }
 
+function buildPrevNeighbors(history){
+  // 가장 최근에 자리가 기록된 회차에서, 앞뒤(fb) / 좌우(lr)로 붙어 앉았던 학생 쌍을 찾아요.
+  const rec = history.find(r=>r.seatMap && r.seatMap.length>0);
+  const fb = new Set(), lr = new Set();
+  if(!rec) return {fb, lr};
+  const cells = {};
+  rec.seatMap.forEach(e=>{ (cells[e.r+'_'+e.c] = cells[e.r+'_'+e.c] || []).push(e.id); });
+  Object.keys(cells).forEach(k=>{
+    const [r,c] = k.split('_').map(Number);
+    const down = cells[(r+1)+'_'+c];
+    const right = cells[r+'_'+(c+1)];
+    if(down) cells[k].forEach(a=>down.forEach(b=>fb.add(keyOf(a,b))));
+    if(right) cells[k].forEach(a=>right.forEach(b=>lr.add(keyOf(a,b))));
+  });
+  return {fb, lr};
+}
+
+function buildPairPenalty(history){
+  // 예전에 짝이었던 사이일수록 벌점이 커요. 횟수가 먼저, 그다음 최근일수록 더 커요.
+  const H = history.length;
+  const pen = {};
+  history.forEach((rec,k)=>{
+    const add = (a,b)=>{ const key = keyOf(a,b); pen[key] = (pen[key]||0) + 1000 + 10*(H-k); };
+    (rec.pairs||[]).forEach(([a,b])=>add(a,b));
+    if(rec.triple){ const [a,b,c]=rec.triple; add(a,b); add(a,c); add(b,c); }
+  });
+  return pen;
+}
+
+function hungarianMin(cost){
+  // 정사각 비용표에서 총합이 가장 작은 1:1 짝짓기를 찾아요. (결과: 행 i -> 열 배열)
+  const n = cost.length;
+  const INF = Infinity;
+  const u = new Array(n+1).fill(0), v = new Array(n+1).fill(0);
+  const p = new Array(n+1).fill(0), way = new Array(n+1).fill(0);
+  for(let i=1;i<=n;i++){
+    p[0] = i;
+    let j0 = 0;
+    const minv = new Array(n+1).fill(INF);
+    const used = new Array(n+1).fill(false);
+    do{
+      used[j0] = true;
+      const i0 = p[j0];
+      let delta = INF, j1 = 0;
+      for(let j=1;j<=n;j++){
+        if(used[j]) continue;
+        const cur = cost[i0-1][j-1] - u[i0] - v[j];
+        if(cur < minv[j]){ minv[j] = cur; way[j] = j0; }
+        if(minv[j] < delta){ delta = minv[j]; j1 = j; }
+      }
+      for(let j=0;j<=n;j++){
+        if(used[j]){ u[p[j]] += delta; v[j] -= delta; }
+        else minv[j] -= delta;
+      }
+      j0 = j1;
+    }while(p[j0] !== 0);
+    do{
+      const j1 = way[j0];
+      p[j0] = p[j1];
+      j0 = j1;
+    }while(j0);
+  }
+  const result = new Array(n);
+  for(let j=1;j<=n;j++) result[p[j]-1] = j-1;
+  return result;
+}
+
 function backtrackMatch(ids, isForbidden, counter){
   if(ids.length===0) return [];
   counter.calls++;
@@ -636,6 +703,7 @@ function generateAssignment(){
   }
   const incompatSet = new Set(state.incompatible.map(([a,b])=>keyOf(a,b)));
   const usedSet = buildUsedSet(state.history);
+  const pairPenalty = buildPairPenalty(state.history);
 
   const boysAll = students.filter(s=>s.gender==='M').map(s=>s.id);
   const girlsAll = students.filter(s=>s.gender==='F').map(s=>s.id);
@@ -669,16 +737,19 @@ function generateAssignment(){
     const leftover = shuffledMaj.slice(0, leftoverCount);
     const crossMaj = shuffledMaj.slice(leftoverCount);
 
-    // 1) cross-gender pairing (crossMaj <-> minAll), strict then relaxed
-    const isForbiddenStrict = (a,b)=> incompatSet.has(keyOf(a,b)) || usedSet.has(keyOf(a,b));
-    let crossPairs = bipartiteBacktrack(shuffle(crossMaj), shuffle(minAll), isForbiddenStrict, {calls:0});
-    let repeats = [];
-    if(!crossPairs){
-      const isForbiddenRelaxed = (a,b)=> incompatSet.has(keyOf(a,b));
-      crossPairs = bipartiteBacktrack(shuffle(crossMaj), shuffle(minAll), isForbiddenRelaxed, {calls:0});
-      if(!crossPairs) continue; // retry outer loop with different leftover split
-      repeats = crossPairs.filter(([a,b])=>usedSet.has(keyOf(a,b))).map(([a,b])=>keyOf(a,b));
-    }
+    // 1) cross-gender pairing (crossMaj <-> minAll)
+    //    안 맞는 친구는 절대 금지, 예전 짝은 "횟수가 적게, 오래전일수록 우선" 되도록 비용 최소로 짝지어요.
+    const BIG = 1e7;
+    const rowsList = shuffle(crossMaj), colsList = shuffle(minAll);
+    const costTable = rowsList.map(a=> colsList.map(b=>{
+      const key = keyOf(a,b);
+      if(incompatSet.has(key)) return BIG;
+      return (pairPenalty[key] || 0) + Math.random();
+    }));
+    const colOfRow = hungarianMin(costTable);
+    if(costTable.some((row,i)=> row[colOfRow[i]] >= BIG)) continue; // 안 맞는 친구가 끼어서 불가능 -> 다른 조합으로 재시도
+    const crossPairs = rowsList.map((a,i)=>[a, colsList[colOfRow[i]]]);
+    const repeats = crossPairs.filter(([a,b])=>usedSet.has(keyOf(a,b))).map(([a,b])=>keyOf(a,b));
 
     // 2) handle leftover (same-gender) group
     if(leftoverCount === 0){
@@ -688,7 +759,12 @@ function generateAssignment(){
     if(leftoverCount === 1){
       // merge the single leftover person into one cross pair to form a triple
       const single = leftover[0];
-      const candidateIdxs = shuffle(crossPairs.map((_,i)=>i));
+      // 예전에 짝이었던 적이 없는 쌍에 끼워 넣는 걸 우선해요.
+      const repeatScore = (idx)=>{
+        const [a,b] = crossPairs[idx];
+        return (usedSet.has(keyOf(single,a))?1:0) + (usedSet.has(keyOf(single,b))?1:0);
+      };
+      const candidateIdxs = shuffle(crossPairs.map((_,i)=>i)).sort((x,y)=> repeatScore(x)-repeatScore(y));
       let merged = null;
       for(const idx of candidateIdxs){
         const [a,b] = crossPairs[idx];
@@ -761,8 +837,9 @@ function hasIncompat(groupA, groupB, incompatSet){
   return false;
 }
 
-function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
+function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap, prevNeighbors){
   lastSeatMap = lastSeatMap || {};
+  prevNeighbors = prevNeighbors || {fb:new Set(), lr:new Set()};
   const totalCells = cols * rows;
   if(groups.length > totalCells){
     return {error:`좌석(${totalCells}자리)보다 모둠 수(${groups.length})가 많아요. 분단/줄 수를 늘려주세요.`};
@@ -789,81 +866,117 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
     });
   }
 
-  function attempt(avoidSeatRepeat, avoidEdgeRepeat){
-    const order = shuffle(activeCellIdxs.map((_,i)=>i)); // order in which we fill positions (indices into activeCellIdxs)
-    const assignment = new Array(activeCellIdxs.length).fill(null);
-    const counter = {calls:0};
-    function rec(step, remaining){
-      if(step === order.length) return true;
-      counter.calls++;
-      if(counter.calls > 200000) return false;
-      const posIdx = order[step];
-      const cell = allCells[activeCellIdxs[posIdx]];
-      const nbrPosIdxs = neighborMap[posIdx].map(cellIdx=>activeCellIdxs.indexOf(cellIdx));
-      const candidates = shuffle(remaining);
-      for(const g of candidates){
-        let conflict=false;
-        for(const nPos of nbrPosIdxs){
-          if(assignment[nPos] && hasIncompat(g, assignment[nPos], incompatSet)){ conflict=true; break; }
-        }
-        if(!conflict && avoidSeatRepeat && isSameSeatAsBefore(g, cell)){ conflict = true; }
-        if(!conflict && avoidEdgeRepeat && isEdgeRowRepeat(g, cell)){ conflict = true; }
-        if(conflict) continue;
-        assignment[posIdx] = g;
-        const rest = remaining.filter(x=>x!==g);
-        if(rec(step+1, rest)) return true;
-        assignment[posIdx] = null;
+  // 두 모둠이 붙어 앉게 될 때, 지난번에 앞뒤(fb) / 좌우(lr)로 붙어 앉았던 학생 쌍이 몇 쌍인지
+  function prevNeighborCounts(gA, gB){
+    let fbN = 0, lrN = 0;
+    for(const a of gA){
+      for(const b of gB){
+        const key = keyOf(a,b);
+        if(prevNeighbors.fb.has(key)) fbN++;
+        else if(prevNeighbors.lr.has(key)) lrN++;
       }
-      return false;
     }
-    const ok = rec(0, groups);
-    return ok ? assignment : null;
+    return {fbN, lrN};
+  }
+  function hadBeenNeighbors(gA, gB){
+    const {fbN, lrN} = prevNeighborCounts(gA, gB);
+    return fbN + lrN > 0;
   }
 
-  // 1차: 안 맞는 친구 + 이전 자리 + 이전 맨 앞/뒷줄까지 모두 회피 시도
-  let assignment = null;
-  for(let i=0;i<25;i++){
-    assignment = attempt(true, true);
-    if(assignment) break;
-  }
-  // 2차: 앞/뒷줄 회피는 포기하고, 이전 자리 회피는 유지
-  if(!assignment){
-    for(let i=0;i<25;i++){
-      assignment = attempt(true, false);
-      if(assignment) break;
+  // 벌점 방식: 우선순위가 높은 조건일수록 벌점이 커요.
+  // ①안 맞는 친구(사실상 절대 금지) ②이전과 같은 자리 ③이전 맨 앞/뒷줄 반복 ④앞뒤로 다시 붙기 ⑤좌우로 다시 붙기
+  const W_INCOMPAT = 1000000, W_SEAT = 1000, W_FB = 100, W_EDGE = 300, W_LR = 30;
+  const n = groups.length;
+  const posCells = activeCellIdxs.map(i=>allCells[i]);
+  const posNbrs = neighborMap.map(list=> list.map(cellIdx=>activeCellIdxs.indexOf(cellIdx)));
+
+  // 모둠 둘이 붙어 앉을 때의 벌점 / 모둠이 특정 자리에 앉을 때의 벌점을 미리 계산해둬요
+  const pairCost = groups.map(()=> new Array(n).fill(0));
+  for(let i=0;i<n;i++){
+    for(let j=i+1;j<n;j++){
+      let c = hasIncompat(groups[i], groups[j], incompatSet) ? W_INCOMPAT : 0;
+      const {fbN, lrN} = prevNeighborCounts(groups[i], groups[j]);
+      c += fbN*W_FB + lrN*W_LR;
+      pairCost[i][j] = pairCost[j][i] = c;
     }
   }
-  // 3차: 이전 자리 회피도 포기, 안 맞는 친구 회피만 유지
-  if(!assignment){
-    for(let i=0;i<25;i++){
-      assignment = attempt(false, false);
-      if(assignment) break;
+  const seatCost = groups.map(g=> posCells.map(cell=>
+    (isSameSeatAsBefore(g, cell) ? W_SEAT : 0) + (isEdgeRowRepeat(g, cell) ? W_EDGE : 0)
+  ));
+  function totalCost(perm){ // perm[자리번호] = 모둠번호
+    let c = 0;
+    for(let p=0;p<n;p++){
+      c += seatCost[perm[p]][p];
+      for(const q of posNbrs[p]){ if(q>p) c += pairCost[perm[p]][perm[q]]; }
+    }
+    return c;
+  }
+
+  // 무작위로 시작해서, 두 모둠 자리를 바꿨을 때 벌점이 줄면 바꾸는 걸 반복해요. 여러 번 다시 시작해서 가장 좋은 배치를 골라요.
+  let bestPerm = null, bestCost = Infinity;
+  for(let restart=0; restart<300 && bestCost>0; restart++){
+    const perm = shuffle(groups.map((_,i)=>i));
+    let cost = totalCost(perm);
+    let improved = true;
+    while(improved){
+      improved = false;
+      for(let i=0;i<n-1;i++){
+        for(let j=i+1;j<n;j++){
+          [perm[i],perm[j]] = [perm[j],perm[i]];
+          const c2 = totalCost(perm);
+          if(c2 < cost){ cost = c2; improved = true; }
+          else { [perm[i],perm[j]] = [perm[j],perm[i]]; }
+        }
+      }
+    }
+    if(cost < bestCost){ bestCost = cost; bestPerm = perm.slice(); }
+  }
+  let assignment = bestPerm.map(gi=>groups[gi]);
+
+  // 그래도 "안 맞는 친구"가 붙어버렸다면, 그 조건만 정확하게 푸는 방식(백트래킹)으로 한 번 더 시도해요.
+  if(bestCost >= W_INCOMPAT){
+    for(let t=0;t<25;t++){
+      const order = shuffle(activeCellIdxs.map((_,i)=>i));
+      const asg = new Array(n).fill(null);
+      const counter = {calls:0};
+      const rec = (step, remaining)=>{
+        if(step === order.length) return true;
+        counter.calls++;
+        if(counter.calls > 200000) return false;
+        const pos = order[step];
+        for(const g of shuffle(remaining)){
+          if(posNbrs[pos].some(q=> asg[q] && hasIncompat(g, asg[q], incompatSet))) continue;
+          asg[pos] = g;
+          if(rec(step+1, remaining.filter(x=>x!==g))) return true;
+          asg[pos] = null;
+        }
+        return false;
+      };
+      if(rec(0, groups)){ assignment = asg; break; }
     }
   }
 
+  // 아직도 붙어 있는 "안 맞는 친구"가 있으면 표시해요 (붉은 테두리)
   let violations = [];
-  if(!assignment){
-    // 최후의 수단: 그냥 무작위 배치하고, 어디서 문제가 생기는지 표시
-    const shuffledGroups = shuffle(groups);
-    assignment = activeCellIdxs.map((_,i)=> shuffledGroups[i]);
-    for(let i=0;i<activeCellIdxs.length;i++){
-      for(const nCellIdx of neighborMap[i]){
-        const nPos = activeCellIdxs.indexOf(nCellIdx);
-        if(nPos>i && hasIncompat(assignment[i], assignment[nPos], incompatSet)){
-          violations.push([i,nPos]);
-        }
-      }
+  for(let i=0;i<n;i++){
+    for(const q of posNbrs[i]){
+      if(q>i && hasIncompat(assignment[i], assignment[q], incompatSet)) violations.push([i,q]);
     }
   }
 
   let seatRepeatCount = 0;
   let edgeRepeatCount = 0;
+  let neighborRepeatCount = 0;
   activeCellIdxs.forEach((cellIdx,posIdx)=>{
     const g = assignment[posIdx];
     if(!g) return;
     const cell = allCells[cellIdx];
     if(isSameSeatAsBefore(g, cell)) seatRepeatCount++;
     if(isEdgeRowRepeat(g, cell)) edgeRepeatCount++;
+    neighborMap[posIdx].forEach(nCellIdx=>{
+      const nPos = activeCellIdxs.indexOf(nCellIdx);
+      if(nPos>posIdx && assignment[nPos] && hadBeenNeighbors(g, assignment[nPos])) neighborRepeatCount++;
+    });
   });
 
   const cellsResult = allCells.map((cell,i)=>{
@@ -876,7 +989,7 @@ function placeGroupsInGrid(groups, cols, rows, incompatSet, lastSeatMap){
     cellsResult[cellIdxB].hasViolation = true;
   });
 
-  return { cells: cellsResult, cols, rows, violationCount: violations.length, seatRepeatCount, edgeRepeatCount };
+  return { cells: cellsResult, cols, rows, violationCount: violations.length, seatRepeatCount, edgeRepeatCount, neighborRepeatCount, cost: violations.length>0 ? Infinity : bestCost };
 }
 
 // ---------- 지난 기록 가져오기 ----------
@@ -1363,6 +1476,8 @@ function renderAssignTab(){
         wrap.appendChild(el(`<div class="banner warn">앞/뒤/좌우 배치에서 "안 맞는 친구"가 완전히 안 겹치는 자리를 못 찾았어요 (남은 충돌 ${seating.violationCount}건, 붉은 테두리 표시). "다시 뽑기"를 눌러보거나, 상성 설정을 조금 줄여보세요.</div>`));
       } else if(seating && seating.seatRepeatCount>0){
         wrap.appendChild(el(`<div class="banner warn">일부 학생(${seating.seatRepeatCount}명)이 저번에 앉았던 자리에 다시 배정됐어요. 조합이 너무 제한적일 때 생길 수 있어요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
+      } else if(seating && seating.neighborRepeatCount>0){
+        wrap.appendChild(el(`<div class="banner warn">지난번에 붙어 앉았던 친구끼리 다시 붙은 곳이 ${seating.neighborRepeatCount}군데 있어요. 조건이 너무 빡빡할 때 생길 수 있어요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
       } else if(seating && seating.edgeRepeatCount>0){
         wrap.appendChild(el(`<div class="banner warn">일부 학생(${seating.edgeRepeatCount}명)이 저번에도 맨 앞줄/맨 뒷줄이었는데 이번에도 같은 쪽 줄이에요. 마음에 안 들면 "다시 뽑기"를 눌러보세요.</div>`));
       } else if(anyRepeat){
@@ -1400,12 +1515,7 @@ function renderAssignTab(){
   }
 
   wrap.querySelector('#draw-btn').addEventListener('click', ()=>{
-    pendingAssignment = generateAssignment();
-    if(pendingAssignment && !pendingAssignment.error){
-      const incompatSet = new Set(state.incompatible.map(([a,b])=>keyOf(a,b)));
-      const groups = groupsFromAssignment(pendingAssignment);
-      pendingAssignment.seating = placeGroupsInGrid(groups, state.seating.cols, state.seating.rows, incompatSet, buildLastSeatMap(state.history));
-    }
+    pendingAssignment = drawBestAssignment();
     render();
   });
   const confirmBtn = wrap.querySelector('#confirm-btn');
@@ -1520,6 +1630,35 @@ function renderPresentTab(){
   });
 
   return wrap;
+}
+
+// 짝 조합을 여러 번 뽑아 보고, "예전 짝 반복이 가장 적고 → 자리 벌점이 가장 낮은" 조합을 골라요.
+function drawBestAssignment(){
+  const incompatSet = new Set(state.incompatible.map(([a,b])=>keyOf(a,b)));
+  const lastSeatMap = buildLastSeatMap(state.history);
+  const prevNeighbors = buildPrevNeighbors(state.history);
+  const MAX_TRIES = 12, TIME_BUDGET_MS = 1500, MIN_TRIES = 3;
+  const startedAt = Date.now();
+  let best = null;
+  for(let k=0;k<MAX_TRIES;k++){
+    const asg = generateAssignment();
+    if(asg.error){
+      if(!best) return asg;   // 학생 수/성별 미지정 등은 여러 번 해도 같은 문제예요
+      continue;
+    }
+    const groups = groupsFromAssignment(asg);
+    const seating = placeGroupsInGrid(groups, state.seating.cols, state.seating.rows, incompatSet, lastSeatMap, prevNeighbors);
+    asg.seating = seating;
+    if(seating.error) return asg;  // 좌석 수 부족 등
+    const repeatCount = (asg.repeats||[]).length + (asg.tripleRepeat ? 1 : 0);
+    const better = !best
+      || repeatCount < best.repeatCount
+      || (repeatCount === best.repeatCount && seating.cost < best.asg.seating.cost);
+    if(better) best = {asg, repeatCount};
+    if(best.repeatCount===0 && best.asg.seating.cost===0) break;       // 더 볼 것 없이 완벽한 조합
+    if(k+1>=MIN_TRIES && Date.now()-startedAt > TIME_BUDGET_MS) break; // 느린 컴퓨터에서는 시간 제한
+  }
+  return best ? best.asg : {error:'조건에 맞는 짝을 찾을 수 없어요.'};
 }
 
 function renderHistoryTab(){
